@@ -1,0 +1,130 @@
+#include <HardwareSerial.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+
+// Pin Definitions
+#define CO2_UART_PIN 16    // GPIO16 for UART RX
+#define CO2_S_PIN 34       // GPIO34 for S pin
+
+// WiFi and ThingSpeak Settings
+const char* ssid = "ONTOR";           // Updated SSID
+const char* password = "11112222";     // Updated password
+String apiKey = "2XR6W9VH4LHR465G";
+
+// CO2 calibration values
+#define CO2_MIN 200    
+#define CO2_MAX 1000   
+#define ADC_MIN 0      
+#define ADC_MAX 1000   
+
+HardwareSerial CO2Serial(1);
+
+void setup() {
+  Serial.begin(115200);
+  delay(2000);
+  
+  Serial.println("\n=== CO2 Sensor System ===");
+  Serial.println("Date: 2025-03-08");
+  Serial.println("Time: 16:36:13");
+  Serial.println("User: RayhanOfc");
+  
+  // Initialize CO2 sensor
+  CO2Serial.begin(9600, SERIAL_8N1, CO2_UART_PIN, -1);
+  
+  // Connect to WiFi
+  WiFi.begin(ssid, password);
+  Serial.print("Connecting to WiFi");
+  while (WiFi.status() != WL_CONNECTED && WiFi.status() != WL_CONNECT_FAILED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println();
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("WiFi Connected!");
+  } else {
+    Serial.println("WiFi Connection Failed!");
+  }
+}
+
+int decodeCO2FromUART() {
+  String co2String = "";
+  while (CO2Serial.available()) {
+    char c = CO2Serial.read();
+    if (c >= '0' && c <= '9') {
+      co2String += c;
+    }
+  }
+  
+  if (co2String.length() > 0) {
+    int value = co2String.toInt();
+    if (value >= CO2_MIN && value <= CO2_MAX) {
+      return value;
+    }
+  }
+  return -1;
+}
+
+int calculateCO2FromAnalog(int analogValue) {
+  if (analogValue < ADC_MIN) analogValue = ADC_MIN;
+  if (analogValue > ADC_MAX) analogValue = ADC_MAX;
+  
+  return map(analogValue, ADC_MIN, ADC_MAX, CO2_MIN, CO2_MAX);
+}
+
+void loop() {
+  Serial.println("\n=== Reading CO2 ===");
+  
+  // Read raw analog value
+  int raw_analog = analogRead(CO2_S_PIN);
+  
+  // Calculate CO2 from analog
+  int co2ppm = calculateCO2FromAnalog(raw_analog);
+  
+  // Get UART reading if available
+  int co2_uart = -1;
+  if (CO2Serial.available()) {
+    co2_uart = decodeCO2FromUART();
+  }
+  
+  // Print all readings
+  Serial.print("Raw Analog (GPIO34): ");
+  Serial.println(raw_analog);
+  
+  Serial.print("Calculated CO2: ");
+  Serial.print(co2ppm);
+  Serial.println(" ppm");
+  
+  if (co2_uart != -1) {
+    Serial.print("UART CO2: ");
+    Serial.print(co2_uart);
+    Serial.println(" ppm");
+  }
+  
+  // Send to ThingSpeak
+  if (WiFi.status() == WL_CONNECTED) {
+    String url = "http://api.thingspeak.com/update?api_key=" + apiKey;
+    
+    // Use UART reading if available, otherwise use analog
+    if (co2_uart != -1) {
+      url += "&field1=" + String(co2_uart);
+    } else {
+      url += "&field1=" + String(co2ppm);
+    }
+    
+    HTTPClient http;
+    http.begin(url);
+    int httpCode = http.GET();
+    
+    if (httpCode > 0) {
+      Serial.println("ThingSpeak Update: Success");
+    } else {
+      Serial.println("ThingSpeak Update: Failed");
+    }
+    http.end();
+  }
+  
+  Serial.println("\nWaiting 15 seconds...");
+  Serial.println("========================");
+  delay(15000);
+}
